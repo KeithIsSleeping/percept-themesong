@@ -1,0 +1,50 @@
+# SSH keys
+id_rsa
+id_rsa.pub
+*.pem
+
+# Personal photos (add your own, don't commit)
+photos/*
+!photos/.gitkeep
+
+# Songs (copyrighted, add your own)
+songs/*
+!songs/.gitkeep
+
+# AI models (downloaded at build time via setup_models.sh)
+models/*
+!models/.gitkeep
+
+# Face embeddings (generated during enrollment)
+data/faces/*
+!data/faces/.gitkeep
+
+# Debug/temp images
+data/*.jpg
+data/*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
