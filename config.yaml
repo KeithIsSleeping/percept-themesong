@@ -36,4 +36,4 @@ playback:
 general:
   log_level: "INFO"         # DEBUG, INFO, WARNING, ERROR
   display_preview: false    # Set true if you have a monitor connected
-  detection_interval: 0.5   # Seconds between detection cycles (saves CPU)
+  detection_interval: 0.2   # Seconds between detection cycles (saves CPU)

@@ -41,9 +41,15 @@ POLICYEOF
 printf 'power on\nquit\n' | bluetoothctl
 sleep 1
 
-# --- PulseAudio (system mode, BT + TCP) ---
-mkdir -p /var/run/pulse /var/lib/pulse
+# --- PulseAudio (system mode, BT + TCP, low-latency) ---
+mkdir -p /var/run/pulse /var/lib/pulse /etc/pulse
 rm -f /var/run/pulse/pid
+cat > /etc/pulse/daemon.conf << 'DAEMONEOF'
+default-fragments = 2
+default-fragment-size-msec = 5
+high-priority = yes
+realtime-scheduling = yes
+DAEMONEOF
 pulseaudio --system --disallow-exit --no-cpu-limit \
   --load="module-bluetooth-discover" \
   --load="module-bluetooth-policy" \

@@ -1,23 +1,18 @@
-"""Audio playback with per-person cooldown timers."""
+"""Audio playback with per-person cooldown timers.
+
+Uses pre-decoded WAV cache + paplay for near-instant Bluetooth playback.
+Falls back to ffplay for uncached files.
+"""
 
 import os
 import time
 import logging
 import threading
+import subprocess
+import shutil
+import tempfile
 
 logger = logging.getLogger(__name__)
-
-# pygame.mixer is initialized lazily to avoid import-time audio device issues
-_mixer_initialized = False
-
-
-def _ensure_mixer():
-    """Initialize pygame mixer on first use."""
-    global _mixer_initialized
-    if not _mixer_initialized:
-        import pygame
-        pygame.mixer.init()
-        _mixer_initialized = True
 
 
 class SongPlayer:
@@ -37,6 +32,10 @@ class SongPlayer:
         self._current_proc = None  # currently playing ffplay process
         self._lock = threading.Lock()
         self._keepalive_stop = threading.Event()
+        self._wav_cache = {}  # original path -> pre-decoded WAV path
+        self._cache_dir = tempfile.mkdtemp(prefix="theme-wav-")
+
+        self._precache_songs()
 
         if self.bt_keepalive_interval and self.bt_keepalive_interval > 0:
             self._keepalive_thread = threading.Thread(
@@ -95,12 +94,49 @@ class SongPlayer:
         if self._current_proc and self._current_proc.poll() is None:
             self._current_proc.terminate()
             self._current_proc = None
+
+    def _precache_songs(self):
+        """Pre-decode all songs to WAV at startup for instant playback."""
+        if not shutil.which("ffmpeg"):
+            logger.warning("ffmpeg not found, skipping WAV pre-cache")
+            return
+
+        songs = []
+        if os.path.isdir(self.songs_dir):
+            for f in os.listdir(self.songs_dir):
+                if f.lower().endswith((".mp3", ".ogg", ".flac", ".m4a")):
+                    songs.append(os.path.join(self.songs_dir, f))
+        if self.stranger_song and os.path.exists(self.stranger_song):
+            songs.append(self.stranger_song)
+
+        for src in songs:
+            self._cache_wav(src)
+
+        logger.info("Pre-cached %d song(s) as WAV for instant playback", len(self._wav_cache))
+
+    def _cache_wav(self, filepath: str) -> str:
+        """Convert a single audio file to WAV. Returns cached WAV path."""
+        if filepath in self._wav_cache:
+            return self._wav_cache[filepath]
+
+        basename = os.path.splitext(os.path.basename(filepath))[0]
+        wav_path = os.path.join(self._cache_dir, f"{basename}.wav")
+
+        cmd = ["ffmpeg", "-y", "-i", filepath]
+        if self.max_duration:
+            cmd += ["-t", str(self.max_duration)]
+        cmd += ["-ar", "44100", "-ac", "2", "-f", "wav", wav_path]
+
         try:
-            import pygame
-            if _mixer_initialized:
-                pygame.mixer.music.stop()
-        except Exception:
-            pass
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=30)
+            if os.path.exists(wav_path):
+                self._wav_cache[filepath] = wav_path
+                logger.debug("Cached WAV: %s -> %s", filepath, wav_path)
+                return wav_path
+        except Exception as e:
+            logger.warning("Failed to cache %s: %s", filepath, e)
+        return None
 
     def _cooldown_elapsed(self, name: str) -> bool:
         """Check if enough time has passed since last play for this person."""
@@ -127,19 +163,28 @@ class SongPlayer:
         return None
 
     def _play_file(self, filepath: str):
-        """Play an audio file via PulseAudio TCP (for Bluetooth) or fallback to pygame."""
-        import subprocess
-        import shutil
-        import os
-
+        """Play audio via paplay (instant, WAV cache) or ffplay fallback."""
         self._last_audio = time.time()
 
         env = os.environ.copy()
         env["PULSE_SERVER"] = env.get("PULSE_SERVER", "tcp:127.0.0.1:4713")
 
+        # Try instant playback via paplay + pre-cached WAV
+        wav_path = self._wav_cache.get(filepath) or self._cache_wav(filepath)
+        if wav_path and shutil.which("paplay"):
+            vol_str = str(int(self.volume * 65536))  # paplay uses 0-65536
+            cmd = ["paplay", "--volume", vol_str, wav_path]
+            self._current_proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+            )
+            return
+
+        # Fallback: ffplay (slower startup but handles any format)
         if shutil.which("ffplay"):
-            cmd = ["ffplay", "-nodisp", "-autoexit", "-volume",
-                   str(int(self.volume * 100))]
+            cmd = ["ffplay", "-nodisp", "-autoexit",
+                   "-fflags", "nobuffer",
+                   "-analyzeduration", "0", "-probesize", "32",
+                   "-volume", str(int(self.volume * 100))]
             if self.max_duration:
                 cmd += ["-t", str(self.max_duration)]
             cmd.append(filepath)
@@ -148,19 +193,8 @@ class SongPlayer:
             )
             return
 
-        # Fallback to pygame mixer
-        _ensure_mixer()
-        import pygame
-        pygame.mixer.music.set_volume(self.volume)
-        pygame.mixer.music.load(filepath)
-        pygame.mixer.music.play(maxtime=int(self.max_duration * 1000) if self.max_duration else 0)
-
     def _bt_keepalive_loop(self):
         """Background thread that sends silence to prevent BT speaker from sleeping."""
-        import subprocess
-        import shutil
-        import os
-
         while not self._keepalive_stop.wait(30):
             elapsed = time.time() - self._last_audio
             if elapsed >= self.bt_keepalive_interval:
