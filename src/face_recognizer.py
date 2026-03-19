@@ -2,6 +2,7 @@
 
 import os
 import json
+import random
 import numpy as np
 import logging
 from openvino.runtime import Core
@@ -54,9 +55,12 @@ class FaceRecognizer:
             filepath = os.path.join(self.embeddings_dir, filename)
             with open(filepath, "r") as f:
                 data = json.load(f)
+            songs = data.get("songs", [])
+            if not songs and data.get("song"):
+                songs = [data["song"]]
             self.known_faces[name] = {
                 "embeddings": [np.array(e) for e in data["embeddings"]],
-                "song": data.get("song"),
+                "songs": songs,
             }
             logger.info("Loaded %d embedding(s) for '%s'", len(data["embeddings"]), name)
 
@@ -92,26 +96,41 @@ class FaceRecognizer:
     def identify(self, embedding: np.ndarray) -> tuple:
         """Match an embedding against enrolled faces.
 
+        Requires best match to exceed threshold AND have sufficient margin
+        over the second-best person to avoid false matches.
+
         Returns:
             (name, song_path, similarity) if matched, or (None, None, 0.0)
         """
-        best_name = None
-        best_song = None
-        best_similarity = 0.0
-
+        # Collect best similarity per person
+        person_scores = {}
         for name, data in self.known_faces.items():
+            best_for_person = 0.0
             for known_emb in data["embeddings"]:
                 similarity = float(np.dot(embedding, known_emb))
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_name = name
-                    best_song = data.get("song")
+                if similarity > best_for_person:
+                    best_for_person = similarity
+            person_scores[name] = best_for_person
 
-        if best_similarity >= self.threshold:
-            logger.debug("Identified: %s (similarity: %.3f)", best_name, best_similarity)
+        if not person_scores:
+            return None, None, 0.0
+
+        # Sort by similarity descending
+        ranked = sorted(person_scores.items(), key=lambda x: x[1], reverse=True)
+        best_name, best_similarity = ranked[0]
+        second_similarity = ranked[1][1] if len(ranked) > 1 else 0.0
+        margin = best_similarity - second_similarity
+
+        if best_similarity >= self.threshold and margin >= 0.05:
+            data = self.known_faces[best_name]
+            songs = data.get("songs", [])
+            best_song = random.choice(songs) if songs else None
+            logger.debug("Identified: %s (similarity: %.3f, margin: %.3f)",
+                         best_name, best_similarity, margin)
             return best_name, best_song, best_similarity
 
-        logger.debug("Unknown face (best similarity: %.3f)", best_similarity)
+        logger.debug("Unknown face (best: %s=%.3f, 2nd: %.3f, margin: %.3f)",
+                     best_name, best_similarity, second_similarity, margin)
         return None, None, best_similarity
 
     def enroll(self, name: str, embeddings: list, song_path: str = None):

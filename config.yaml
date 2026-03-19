@@ -20,7 +20,7 @@ detection:
 recognition:
   model: "models/face-reidentification-retail-0095.xml"
   device: "CPU"
-  threshold: 0.35           # Cosine similarity threshold (lower = stricter)
+  threshold: 0.55           # Cosine similarity threshold (higher = stricter match)
   embeddings_dir: "data/faces"
 
 # --- Song Playback ---
@@ -28,7 +28,7 @@ playback:
   songs_dir: "songs"
   volume: 0.8               # 0.0 to 1.0
   cooldown_seconds: 300     # Don't replay same person's song within this window
-  max_duration: 30          # Max seconds to play per song (null = full song)
+  max_duration: 20          # Max seconds to play per song (null = full song)
   stranger_song: null       # Path to song for unrecognized faces (null = disabled)
   bt_keepalive_interval: 300  # Seconds between silent pings to keep BT speaker awake (0 = disabled)
 
